@@ -43,7 +43,7 @@ jobs:
       # The race detector matters here: the stream consumer writes to the
       # decision set while the reconciler reads snapshots from it.
       - name: Test
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: CGO_ENABLED=1 go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: Total coverage
         run: go tool cover -func=coverage.out | tail -1
