@@ -26,6 +26,9 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/cs-routeros-sync-bouncer /usr/local/bin/cs-routeros-sync-bouncer
 
-USER nonroot:nonroot
+# Numeric, not the "nonroot" name: Kubernetes cannot resolve a username to
+# a UID, so runAsNonRoot: true rejects the container with "image has
+# non-numeric user". 65532 is what the distroless base already uses.
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/cs-routeros-sync-bouncer"]
 CMD ["-config", "/etc/crowdsec/bouncers/cs-routeros-sync-bouncer.yaml"]
