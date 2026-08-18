@@ -222,3 +222,18 @@ func TestApplyIsIdempotent(t *testing.T) {
 		t.Errorf("set = %v, want empty after a single delete", keys(got))
 	}
 }
+
+// The LAPI treats community_pull and additional_pull as true when the query
+// omits them, and the SDK only puts them on the wire when they are false.
+// Leaving Opts at its zero value therefore opts the bouncer out of the
+// community blocklist without saying so, which is why this is pinned.
+func TestNewBouncerPullsCommunityAndConsoleBlocklists(t *testing.T) {
+	b := newBouncer(Config{URL: "http://lapi:8080", APIKey: "k"})
+
+	if !b.Opts.CommunityPull {
+		t.Error("CommunityPull is false: the bouncer would ask the LAPI to withhold the community blocklist")
+	}
+	if !b.Opts.AdditionalPull {
+		t.Error("AdditionalPull is false: the bouncer would ask the LAPI to withhold console blocklists")
+	}
+}

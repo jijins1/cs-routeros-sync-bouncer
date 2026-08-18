@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/crowdsecurity/crowdsec/pkg/apiclient"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 
@@ -79,6 +80,15 @@ func newBouncer(cfg Config) *csbouncer.StreamBouncer {
 		// Keep retrying if the LAPI is not up yet: on a router this process
 		// and CrowdSec often start together.
 		RetryInitialConnect: true,
+		// Both must be set explicitly. The LAPI treats them as true when the
+		// query omits them, and the client only puts them on the wire when
+		// they are false - so leaving Opts at its zero value silently asks
+		// for community_pull=false&additional_pull=false, cutting the bouncer
+		// off from the community blocklist and any console subscription.
+		Opts: apiclient.DecisionsStreamOpts{
+			CommunityPull:  true,
+			AdditionalPull: true,
+		},
 	}
 }
 
