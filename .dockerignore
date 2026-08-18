@@ -1,0 +1,10 @@
+.git
+.github
+*.md
+Dockerfile
+.dockerignore
+.gitignore
+config.yaml
+config.example.yaml
+coverage.out
+cs-routeros-sync-bouncer

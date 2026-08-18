@@ -1,0 +1,4 @@
+cs-routeros-sync-bouncer
+*.test
+coverage.out
+config.yaml

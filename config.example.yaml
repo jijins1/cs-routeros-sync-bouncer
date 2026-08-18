@@ -1,0 +1,70 @@
+# cs-routeros-sync-bouncer - CrowdSec remediation for MikroTik RouterOS
+#
+# Values of the form ${VAR} are expanded from the environment, so secrets can
+# stay out of this file.
+
+crowdsec:
+  url: http://127.0.0.1:8080
+  # cscli bouncers add cs-routeros-sync-bouncer
+  api_key: ${CROWDSEC_BOUNCER_KEY}
+  # How often the LAPI is polled for new decisions.
+  update_interval: 10s
+  # Only if your LAPI uses a self-signed certificate.
+  insecure_skip_verify: false
+
+mikrotik:
+  # host:port - 8729 for the TLS API, 8728 for the plaintext one.
+  address: 192.168.88.1:8729
+  username: csbouncer
+  password: ${MIKROTIK_PASSWORD}
+  # Leave this on unless the router is reached over a trusted link: the
+  # RouterOS API sends the password in the clear otherwise.
+  tls: true
+  # RouterOS ships with a self-signed certificate; set this to true unless you
+  # have installed one your host trusts.
+  insecure_skip_verify: true
+  timeout: 10s
+
+  address_list_v4: crowdsec-v4
+  address_list_v6: crowdsec-v6
+
+  # The hard limit on how many addresses may sit on the router at once.
+  #
+  # This is a guard against runaway growth, not a tight budget: an entry costs
+  # roughly 100-250 bytes, so even a large list is a small share of a modern
+  # router's memory. Past this number the excess is dropped by priority - local
+  # scenarios first, then blocklists, then CAPI - rather than by whatever
+  # happened to arrive last.
+  #
+  #   hAP ax3, RB4011, RB5009   (1 GB)      150000   <- set below
+  #   hEX / hEX S / cAP ac      (256 MB)    50000
+  #   hEX lite, older RB7xx     (32-64 MB)  10000
+  #   CCR / CHR                 (4 GB+)     0 (no cap)
+  #
+  # Measure the real cost on your own device rather than trusting the table:
+  #   /system resource print
+  #   /ip firewall address-list print count-only
+  max_entries: 150000
+
+  # Entries removed per API call.
+  batch_size: 100
+
+  # How often the router is re-read in full and corrected, even when no
+  # decisions have changed. This is the drift safety net.
+  reconcile_interval: 5m
+
+# Filter decisions by origin. Leave both empty to enforce everything.
+#
+#   crowdsec    locally detected attacks
+#   cscli       bans you added by hand
+#   CAPI        the community blocklist
+#   lists:NAME  a subscribed blocklist
+origins:
+  include: []
+  # Dropping an oversized blocklist outright is usually better than letting
+  # max_entries trim it arbitrarily:
+  # exclude:
+  #   - "lists:firehol_level1"
+  exclude: []
+
+log_level: info
