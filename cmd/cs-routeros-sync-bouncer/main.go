@@ -50,10 +50,22 @@ func run(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Logged before dialling anything: the router connection and the LAPI
+	// handshake below can each take the configured timeout, and an operator
+	// staring at an empty log has no way to tell a slow start from a hang.
+	log.Info("cs-routeros-sync-bouncer starting",
+		"version", version,
+		"router", cfg.MikroTik.Address,
+		"lists", cfg.MikroTik.AddressListV4+"/"+cfg.MikroTik.AddressListV6,
+		"max_entries", cfg.MikroTik.MaxEntries)
+
 	set := decision.NewSet(cfg.MikroTik.MaxEntries, decision.OriginFilter{
 		Include: cfg.Origins.Include,
 		Exclude: cfg.Origins.Exclude,
 	})
+
+	log.Info("connecting to RouterOS", "address", cfg.MikroTik.Address,
+		"tls", cfg.MikroTik.TLS, "timeout", cfg.MikroTik.Timeout)
 
 	router, err := mikrotik.NewRouterOS(ctx, mikrotik.Config{
 		Address:            cfg.MikroTik.Address,
@@ -67,6 +79,9 @@ func run(configPath string) error {
 		return err
 	}
 	defer router.Close()
+
+	log.Info("connected to RouterOS; initialising the CrowdSec stream",
+		"lapi", cfg.CrowdSec.URL)
 
 	stream, err := crowdsec.NewStream(crowdsec.Config{
 		URL:                cfg.CrowdSec.URL,
@@ -96,11 +111,9 @@ func run(configPath string) error {
 		}
 	}
 
-	log.Info("cs-routeros-sync-bouncer starting",
-		"version", version,
-		"router", cfg.MikroTik.Address,
-		"lists", cfg.MikroTik.AddressListV4+"/"+cfg.MikroTik.AddressListV6,
-		"max_entries", cfg.MikroTik.MaxEntries)
+	log.Info("waiting for the first batch of decisions",
+		"update_interval", cfg.CrowdSec.UpdateInterval,
+		"reconcile_interval", cfg.MikroTik.ReconcileInterval)
 
 	errc := make(chan error, 1)
 	go func() { errc <- stream.Run(ctx) }()
@@ -141,6 +154,16 @@ func syncLoop(
 		lastSync = time.Now()
 		if err != nil && ctx.Err() == nil {
 			log.Error("sync failed", "error", err, "added", stats.Added, "removed", stats.Removed)
+			return
+		}
+		// A pass that changed nothing is the steady state and would be pure
+		// noise every reconcile_interval, so it stays at debug. A pass that
+		// touched the router is the only evidence an operator has that the
+		// bouncer is doing its job, so it is not hidden.
+		if stats.Added > 0 || stats.Removed > 0 {
+			log.Info("address-list synchronised", "added", stats.Added, "removed", stats.Removed)
+		} else {
+			log.Debug("address-list already in sync")
 		}
 	}
 
