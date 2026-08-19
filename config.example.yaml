@@ -67,4 +67,15 @@ origins:
   #   - "lists:firehol_level1"
   exclude: []
 
+# Prometheus endpoint. Enabled unless explicitly turned off, since the
+# Kubernetes manifests ship a ServiceMonitor pointing at it.
+#
+# The metric worth alerting on is the gap between decisions_tracked and the
+# sum of decisions_enforced: it is how max_entries silently discarding bans
+# becomes visible. last_successful_sync_timestamp_seconds going stale is the
+# other one - the error counter stays flat while the router is unreachable.
+metrics:
+  enabled: true
+  listen: ":2112"
+
 log_level: info

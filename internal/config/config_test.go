@@ -175,3 +175,62 @@ func TestValidateAllowsZeroMaxEntriesAsUnlimited(t *testing.T) {
 		t.Fatalf("Parse accepted a negative max_entries: %+v", cfg)
 	}
 }
+
+func TestMetricsDefaultsToTheConventionalPort(t *testing.T) {
+	cfg, err := Parse([]byte(`
+crowdsec:
+  url: http://lapi:8080
+  api_key: k
+mikrotik:
+  address: 10.0.0.1:8729
+  username: u
+  tls: true
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !cfg.Metrics.IsEnabled() {
+		t.Error("metrics disabled by default; the chart ships a ServiceMonitor and would scrape nothing")
+	}
+	if cfg.Metrics.Listen != DefaultMetricsListen {
+		t.Errorf("listen = %q, want %q", cfg.Metrics.Listen, DefaultMetricsListen)
+	}
+}
+
+func TestMetricsCanBeTurnedOff(t *testing.T) {
+	cfg, err := Parse([]byte(`
+crowdsec:
+  url: http://lapi:8080
+  api_key: k
+mikrotik:
+  address: 10.0.0.1:8729
+  username: u
+  tls: true
+metrics:
+  enabled: false
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Metrics.IsEnabled() {
+		t.Error("metrics still enabled after being set to false")
+	}
+}
+
+func TestMetricsListenIsValidated(t *testing.T) {
+	_, err := Parse([]byte(`
+crowdsec:
+  url: http://lapi:8080
+  api_key: k
+mikrotik:
+  address: 10.0.0.1:8729
+  username: u
+  tls: true
+metrics:
+  enabled: true
+  listen: "2112"
+`))
+	if err == nil {
+		t.Fatal("a listen address without a port separator was accepted")
+	}
+}

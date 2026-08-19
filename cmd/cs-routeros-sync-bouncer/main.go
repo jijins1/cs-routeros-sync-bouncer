@@ -13,9 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ruokki/cs-routeros-sync-bouncer/internal/config"
 	"github.com/ruokki/cs-routeros-sync-bouncer/internal/crowdsec"
 	"github.com/ruokki/cs-routeros-sync-bouncer/internal/decision"
+	"github.com/ruokki/cs-routeros-sync-bouncer/internal/metrics"
 	"github.com/ruokki/cs-routeros-sync-bouncer/internal/mikrotik"
 	"github.com/ruokki/cs-routeros-sync-bouncer/internal/reconciler"
 )
@@ -58,6 +61,21 @@ func run(configPath string) error {
 		"router", cfg.MikroTik.Address,
 		"lists", cfg.MikroTik.AddressListV4+"/"+cfg.MikroTik.AddressListV6,
 		"max_entries", cfg.MikroTik.MaxEntries)
+
+	// Started before the router and LAPI connections so a bouncer that is slow
+	// to reach either is still scrapeable while it waits. A connection that
+	// fails outright still ends the process; there the pod restart is the
+	// signal, not the endpoint.
+	var mx *metrics.Metrics
+	metricsErr := make(chan error, 1)
+	if cfg.Metrics.IsEnabled() {
+		reg := prometheus.NewRegistry()
+		mx = metrics.New(reg, version)
+		mx.SetMaxEntries(cfg.MikroTik.MaxEntries)
+
+		log.Info("serving metrics", "listen", cfg.Metrics.Listen, "path", "/metrics")
+		go func() { metricsErr <- metrics.Serve(ctx, cfg.Metrics.Listen, mx.Handler()) }()
+	}
 
 	set := decision.NewSet(cfg.MikroTik.MaxEntries, decision.OriginFilter{
 		Include: cfg.Origins.Include,
@@ -118,7 +136,7 @@ func run(configPath string) error {
 	errc := make(chan error, 1)
 	go func() { errc <- stream.Run(ctx) }()
 
-	if err := syncLoop(ctx, rec, changed, errc, cfg, log); err != nil {
+	if err := syncLoop(ctx, rec, changed, errc, metricsErr, cfg, log, mx, set); err != nil {
 		return err
 	}
 	return nil
@@ -139,8 +157,11 @@ func syncLoop(
 	rec *reconciler.Reconciler,
 	changed <-chan struct{},
 	errc <-chan error,
+	metricsErr <-chan error,
 	cfg *config.Config,
 	log *slog.Logger,
+	mx *metrics.Metrics,
+	set *decision.Set,
 ) error {
 	minInterval := cfg.CrowdSec.UpdateInterval
 	ticker := time.NewTicker(cfg.MikroTik.ReconcileInterval)
@@ -150,8 +171,15 @@ func syncLoop(
 	started := false
 
 	sync := func() {
-		stats, err := rec.Sync(ctx, time.Now())
+		syncStart := time.Now()
+		stats, err := rec.Sync(ctx, syncStart)
 		lastSync = time.Now()
+
+		if mx != nil {
+			v4, v6 := set.SnapshotByFamily(lastSync)
+			mx.SetDecisions(set.Len(), len(v4), len(v6))
+			mx.ObserveSync(stats.Added, stats.Removed, lastSync.Sub(syncStart), err)
+		}
 		if err != nil && ctx.Err() == nil {
 			log.Error("sync failed", "error", err, "added", stats.Added, "removed", stats.Removed)
 			return
@@ -175,6 +203,13 @@ func syncLoop(
 
 		case err := <-errc:
 			return err
+
+		case err := <-metricsErr:
+			// The endpoint failing is not worth dropping enforcement for, but
+			// it must not be mistaken for a scrapeable bouncer either.
+			if err != nil {
+				log.Error("metrics endpoint stopped", "error", err)
+			}
 
 		case <-changed:
 			if wait := minInterval - time.Since(lastSync); started && wait > 0 {

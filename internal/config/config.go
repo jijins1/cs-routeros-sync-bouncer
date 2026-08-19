@@ -16,8 +16,22 @@ type Config struct {
 	CrowdSec CrowdSec `yaml:"crowdsec"`
 	MikroTik MikroTik `yaml:"mikrotik"`
 	Origins  Origins  `yaml:"origins"`
+	Metrics  Metrics  `yaml:"metrics"`
 	LogLevel string   `yaml:"log_level"`
 }
+
+// Metrics configures the Prometheus endpoint.
+type Metrics struct {
+	// Enabled is a pointer so that an omitted key can default to true while
+	// an explicit "false" is still honoured. A plain bool would make the
+	// zero value mean "off", which is the wrong default for a chart that
+	// ships a ServiceMonitor.
+	Enabled *bool  `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
+}
+
+// IsEnabled resolves the default for an omitted key.
+func (m Metrics) IsEnabled() bool { return m.Enabled == nil || *m.Enabled }
 
 // CrowdSec describes the LAPI connection.
 type CrowdSec struct {
@@ -72,6 +86,8 @@ const (
 	DefaultMaxEntries        = 10000
 	DefaultBatchSize         = 100
 	DefaultLogLevel          = "info"
+	// 2112 is what the CrowdSec bouncer ecosystem conventionally scrapes.
+	DefaultMetricsListen = ":2112"
 )
 
 // Load reads, expands and validates a configuration file.
@@ -128,6 +144,9 @@ func (c *Config) applyDefaults() {
 	if c.LogLevel == "" {
 		c.LogLevel = DefaultLogLevel
 	}
+	if c.Metrics.Listen == "" {
+		c.Metrics.Listen = DefaultMetricsListen
+	}
 }
 
 // Validate rejects configurations that would misbehave at runtime.
@@ -166,6 +185,10 @@ func (c *Config) Validate() error {
 	}
 	if c.MikroTik.ReconcileInterval <= 0 {
 		errs = append(errs, errors.New("mikrotik.reconcile_interval must be positive"))
+	}
+
+	if c.Metrics.IsEnabled() && !strings.Contains(c.Metrics.Listen, ":") {
+		errs = append(errs, fmt.Errorf("metrics.listen %q must include a port (e.g. :2112)", c.Metrics.Listen))
 	}
 
 	if !c.MikroTik.TLS && c.MikroTik.Password != "" {
