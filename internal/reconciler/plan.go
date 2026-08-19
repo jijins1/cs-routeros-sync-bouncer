@@ -12,9 +12,10 @@ import (
 
 // Plan is the work needed to make one address-list match the desired state.
 type Plan struct {
+	Family mikrotik.Family
 	List   string
 	Add    []mikrotik.Entry
-	Remove []string // RouterOS .id values
+	Remove []string // RouterOS .id values, scoped to Family's table
 }
 
 // IsEmpty reports whether the router is already in the desired state.
@@ -43,8 +44,8 @@ func (p Plan) String() string {
 //   - Addresses are compared in canonical form, because the router echoes
 //     1.2.3.4/32 back as 1.2.3.4 and a textual comparison would treat that as
 //     a difference on every pass.
-func BuildPlan(list string, desired []decision.Decision, actual []mikrotik.Entry, now time.Time) Plan {
-	plan := Plan{List: list}
+func BuildPlan(fam mikrotik.Family, list string, desired []decision.Decision, actual []mikrotik.Entry, now time.Time) Plan {
+	plan := Plan{Family: fam, List: list}
 
 	// Index what is on the router by canonical address.
 	managed := make(map[string][]string, len(actual)) // address -> .id copies

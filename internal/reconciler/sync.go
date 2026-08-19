@@ -69,13 +69,14 @@ func (r *Reconciler) Sync(ctx context.Context, now time.Time) (Stats, error) {
 		errs  []error
 	)
 	for _, task := range []struct {
+		fam     mikrotik.Family
 		list    string
 		desired []decision.Decision
 	}{
-		{r.opts.ListV4, v4},
-		{r.opts.ListV6, v6},
+		{mikrotik.V4, r.opts.ListV4, v4},
+		{mikrotik.V6, r.opts.ListV6, v6},
 	} {
-		s, err := r.syncList(ctx, task.list, task.desired, now)
+		s, err := r.syncList(ctx, task.fam, task.list, task.desired, now)
 		stats.Added += s.Added
 		stats.Removed += s.Removed
 		if err != nil {
@@ -89,17 +90,17 @@ func (r *Reconciler) Sync(ctx context.Context, now time.Time) (Stats, error) {
 	return stats, errors.Join(errs...)
 }
 
-func (r *Reconciler) syncList(ctx context.Context, list string, desired []decision.Decision, now time.Time) (Stats, error) {
+func (r *Reconciler) syncList(ctx context.Context, fam mikrotik.Family, list string, desired []decision.Decision, now time.Time) (Stats, error) {
 	if err := ctx.Err(); err != nil {
 		return Stats{}, err
 	}
 
-	actual, err := r.client.List(ctx, list)
+	actual, err := r.client.List(ctx, fam, list)
 	if err != nil {
 		return Stats{}, fmt.Errorf("read %s: %w", list, err)
 	}
 
-	plan := BuildPlan(list, desired, actual, now)
+	plan := BuildPlan(fam, list, desired, actual, now)
 	if plan.IsEmpty() {
 		r.log.Debug("address-list already in sync", "list", list, "entries", len(desired))
 		return Stats{}, nil
@@ -120,7 +121,7 @@ func (r *Reconciler) apply(ctx context.Context, plan Plan) (Stats, error) {
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-		if err := r.client.Remove(ctx, chunk); err != nil {
+		if err := r.client.Remove(ctx, plan.Family, chunk); err != nil {
 			errs = append(errs, fmt.Errorf("remove from %s: %w", plan.List, err))
 			continue
 		}
@@ -131,7 +132,7 @@ func (r *Reconciler) apply(ctx context.Context, plan Plan) (Stats, error) {
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-		if _, err := r.client.Add(ctx, entry); err != nil {
+		if _, err := r.client.Add(ctx, plan.Family, entry); err != nil {
 			errs = append(errs, fmt.Errorf("add %s to %s: %w", entry.Address, plan.List, err))
 			continue
 		}

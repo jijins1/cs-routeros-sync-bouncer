@@ -12,8 +12,6 @@ import (
 	routeros "github.com/go-routeros/routeros/v3"
 )
 
-const addressListPath = "/ip/firewall/address-list"
-
 // Config describes how to reach the router.
 type Config struct {
 	Address            string // host:port, e.g. 192.168.88.1:8729
@@ -122,7 +120,7 @@ func (r *RouterOS) run(ctx context.Context, words []string) (*routeros.Reply, er
 }
 
 // List returns every entry in the named address-list.
-func (r *RouterOS) List(ctx context.Context, list string) ([]Entry, error) {
+func (r *RouterOS) List(ctx context.Context, fam Family, list string) ([]Entry, error) {
 	query, err := query("list", list)
 	if err != nil {
 		return nil, err
@@ -131,7 +129,7 @@ func (r *RouterOS) List(ctx context.Context, list string) ([]Entry, error) {
 	// ?list= filters server-side; .proplist keeps the reply small, which
 	// matters when the list holds tens of thousands of rows.
 	reply, err := r.run(ctx, []string{
-		addressListPath + "/print",
+		fam.Path() + "/print",
 		query,
 		"=.proplist=.id,address,comment,timeout",
 	})
@@ -153,8 +151,8 @@ func (r *RouterOS) List(ctx context.Context, list string) ([]Entry, error) {
 }
 
 // Add creates one address-list entry and returns its RouterOS .id.
-func (r *RouterOS) Add(ctx context.Context, e Entry) (string, error) {
-	words := []string{addressListPath + "/add"}
+func (r *RouterOS) Add(ctx context.Context, fam Family, e Entry) (string, error) {
+	words := []string{fam.Path() + "/add"}
 	for _, kv := range [][2]string{
 		{"list", e.List},
 		{"address", e.Address},
@@ -185,7 +183,7 @@ func (r *RouterOS) Add(ctx context.Context, e Entry) (string, error) {
 //
 // RouterOS accepts a comma-separated .id list in a single call, so a large
 // cleanup costs a handful of round trips rather than one per entry.
-func (r *RouterOS) Remove(ctx context.Context, ids []string) error {
+func (r *RouterOS) Remove(ctx context.Context, fam Family, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -195,7 +193,7 @@ func (r *RouterOS) Remove(ctx context.Context, ids []string) error {
 		return err
 	}
 
-	if _, err := r.run(ctx, []string{addressListPath + "/remove", joined}); err != nil {
+	if _, err := r.run(ctx, []string{fam.Path() + "/remove", joined}); err != nil {
 		return fmt.Errorf("remove %d entries: %w", len(ids), err)
 	}
 	return nil

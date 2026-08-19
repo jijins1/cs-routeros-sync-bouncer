@@ -29,6 +29,9 @@ type fakeClient struct {
 	addErr  error
 	listErr error
 	rmErr   error
+
+	// families records the Family each list was addressed with.
+	families map[string]mikrotik.Family
 }
 
 func newFakeClient() *fakeClient {
@@ -39,20 +42,22 @@ func (f *fakeClient) seed(list string, entries ...mikrotik.Entry) {
 	f.lists[list] = append(f.lists[list], entries...)
 }
 
-func (f *fakeClient) List(ctx context.Context, list string) ([]mikrotik.Entry, error) {
+func (f *fakeClient) List(ctx context.Context, fam mikrotik.Family, list string) ([]mikrotik.Entry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
+	f.famFor(list, fam)
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
 	return append([]mikrotik.Entry(nil), f.lists[list]...), nil
 }
 
-func (f *fakeClient) Add(ctx context.Context, e mikrotik.Entry) (string, error) {
+func (f *fakeClient) Add(ctx context.Context, fam mikrotik.Family, e mikrotik.Entry) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.addCalls++
+	f.famFor(e.List, fam)
 	if f.addErr != nil {
 		return "", f.addErr
 	}
@@ -62,7 +67,7 @@ func (f *fakeClient) Add(ctx context.Context, e mikrotik.Entry) (string, error) 
 	return e.ID, nil
 }
 
-func (f *fakeClient) Remove(ctx context.Context, ids []string) error {
+func (f *fakeClient) Remove(ctx context.Context, fam mikrotik.Family, ids []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removeCalls++
@@ -88,6 +93,15 @@ func (f *fakeClient) Remove(ctx context.Context, ids []string) error {
 }
 
 func (f *fakeClient) Close() error { return nil }
+
+// famFor records which family each list was addressed with, so a test can
+// assert that IPv6 work is not sent to the IPv4 table. Caller holds f.mu.
+func (f *fakeClient) famFor(list string, fam mikrotik.Family) {
+	if f.families == nil {
+		f.families = map[string]mikrotik.Family{}
+	}
+	f.families[list] = fam
+}
 
 func (f *fakeClient) addressesIn(list string) []string {
 	f.mu.Lock()
@@ -305,14 +319,14 @@ type orderRecorder struct {
 	order *[]string
 }
 
-func (o *orderRecorder) Add(ctx context.Context, e mikrotik.Entry) (string, error) {
+func (o *orderRecorder) Add(ctx context.Context, fam mikrotik.Family, e mikrotik.Entry) (string, error) {
 	*o.order = append(*o.order, "add")
-	return o.fakeClient.Add(ctx, e)
+	return o.fakeClient.Add(ctx, fam, e)
 }
 
-func (o *orderRecorder) Remove(ctx context.Context, ids []string) error {
+func (o *orderRecorder) Remove(ctx context.Context, fam mikrotik.Family, ids []string) error {
 	*o.order = append(*o.order, "remove")
-	return o.fakeClient.Remove(ctx, ids)
+	return o.fakeClient.Remove(ctx, fam, ids)
 }
 
 // flakyAdder fails for one specific address.
@@ -321,9 +335,45 @@ type flakyAdder struct {
 	failOn string
 }
 
-func (f *flakyAdder) Add(ctx context.Context, e mikrotik.Entry) (string, error) {
+func (f *flakyAdder) Add(ctx context.Context, fam mikrotik.Family, e mikrotik.Entry) (string, error) {
 	if e.Address == f.failOn {
 		return "", errors.New("no such item")
 	}
-	return f.fakeClient.Add(ctx, e)
+	return f.fakeClient.Add(ctx, fam, e)
+}
+
+// IPv4 and IPv6 address-lists are separate RouterOS tables. Sending an IPv6
+// address to the IPv4 one makes the device try to resolve it as a hostname and
+// reject it with "is not a valid dns name", so every v6 ban silently went
+// unenforced. This pins each list to its own table.
+func TestSyncAddressesEachFamilyToItsOwnTable(t *testing.T) {
+	c := newFakeClient()
+	r := testReconciler(c, setWith(
+		want("1.2.3.4", time.Hour),
+		want("2602:80d:1005::10", time.Hour),
+	))
+
+	if _, err := r.Sync(context.Background(), now); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	for list, want := range map[string]mikrotik.Family{
+		"crowdsec-v4": mikrotik.V4,
+		"crowdsec-v6": mikrotik.V6,
+	} {
+		if got := c.families[list]; got != want {
+			t.Errorf("%s addressed as family %q, want %q", list, got, want)
+		}
+	}
+}
+
+// The family must select a different RouterOS path, not just travel alongside
+// the call unused.
+func TestFamilyPathsAreDistinct(t *testing.T) {
+	if got := mikrotik.V4.Path(); got != "/ip/firewall/address-list" {
+		t.Errorf("V4 path = %q", got)
+	}
+	if got := mikrotik.V6.Path(); got != "/ipv6/firewall/address-list" {
+		t.Errorf("V6 path = %q", got)
+	}
 }
